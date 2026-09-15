@@ -2,53 +2,52 @@ import { ObjectLoopProcessor } from "./object-loop-processor.js";
 
 /**
  * Processor for "uuid-link" data type - dereferences UUID links to documents
- * Supports syntax like: "class => {name}" to access properties of linked documents
+ * Supports syntax like: "system.class => {name}" to access properties of linked documents
  */
 export class UuidLinkProcessor extends ObjectLoopProcessor {
   /**
-   * Check if a value is a valid UUID or array with any valid UUIDs
-   * @param {any} value - The value to check
-   * @returns {boolean} True if the value is a UUID or array of UUIDs
-   * @private
+   * Override normalizeObjectData to dereference UUID strings before normalizing.
+   * A string is treated as a single UUID, an array as a list of UUIDs. Anything
+   * else is passed through to the parent implementation without modifications.
+   * @param {any} objData - A UUID string, array of UUID strings, or regular object data
+   * @returns {Array<object>} Normalized array of document data objects
    */
-  isUuid(value) {
-    if (Array.isArray(value)) {
-      return value.some((val) => this.isUuid(val));
+  normalizeObjectData(objData) {
+    if (typeof objData === "string") {
+      return super.normalizeObjectData(this.dereferenceUuids([objData]));
     }
-    return foundry.utils.parseUuid(value)?.collection !== undefined;
+    if (Array.isArray(objData)) {
+      return super.normalizeObjectData(this.dereferenceUuids(objData));
+    }
+    return super.normalizeObjectData(objData);
   }
 
   /**
-   * Override normalizeObjectData to dereference UUIDs instead of treating them as objects
-   * Falls back to parent implementation for non-UUID data
-   * @param {any} objData - The UUID string, array of UUID strings, or regular object data
-   * @returns {Array<Object>} Array of dereferenced document data objects
+   * Resolve each UUID string to its document data. Non-string entries are kept as-is
+   * and UUIDs that cannot be resolved are skipped.
+   * @param {Array<any>} values - UUID strings (or already resolved objects)
+   * @returns {Array<object>} Resolved document data objects
    */
-  normalizeObjectData(objData) {
-    // Check if this is UUID data - if not, use parent implementation
-    if (!this.isUuid(objData)) {
-      return super.normalizeObjectData(objData);
-    }
-
-    // Convert single UUID to array for uniform processing
-    const uuids = Array.isArray(objData) ? objData : [objData];
+  dereferenceUuids(values) {
     const result = [];
 
-    for (const uuid of uuids) {
+    for (const value of values) {
+      if (typeof value !== "string") {
+        result.push(value);
+        continue;
+      }
+
       try {
         // @ts-ignore
-        const linkedDocument = fromUuidSync(uuid);
-
+        const linkedDocument = fromUuidSync(value, { strict: false });
         if (!linkedDocument) {
           continue;
         }
 
         // Convert document to data object for template processing
-        const documentData = linkedDocument.toObject ? linkedDocument.toObject() : linkedDocument;
-        result.push(documentData);
+        result.push(linkedDocument.toObject ? linkedDocument.toObject() : linkedDocument);
       } catch (error) {
-        console.warn(`Failed to dereference UUID: ${uuid}`, error);
-        continue;
+        console.warn(`Failed to dereference UUID: ${value}`, error);
       }
     }
 
